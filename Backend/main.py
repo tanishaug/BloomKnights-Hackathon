@@ -19,29 +19,38 @@ load_dotenv()
 app = FastAPI(title="GridPulse AI Enterprise Engine", version="3.0.0")
 allowed_origins = [
     origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000,https://gridpulse-web.onrender.com",
+    ).split(",")
     if origin.strip()
 ]
+allowed_origin_regex = os.getenv(
+    "ALLOWED_ORIGIN_REGEX",
+    r"^https://([a-z0-9-]+\.)*(onrender\.com|netlify\.app|vercel\.app|github\.dev)$|^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=allowed_origin_regex,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError(
-        "CRITICAL: GEMINI_API_KEY environment variable is missing in .env")
-
-ai_client = genai.Client(api_key=GEMINI_API_KEY)
-print("SUCCESS: Actual Gemini AI Engine Online.")
+ai_client = None
+if GEMINI_API_KEY:
+    ai_client = genai.Client(api_key=GEMINI_API_KEY)
+    print("SUCCESS: Actual Gemini AI Engine Online.")
+else:
+    print("WARNING: GEMINI_API_KEY missing; running deterministic search/report fallback.")
 
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
 
 # Real-world physical constants
 ELECTRICITY_RATE_KWH = 0.22
@@ -114,7 +123,8 @@ def _stable_number(seed: str, minimum: int, maximum: int) -> int:
 
 def _normalize_address(value: str) -> str:
     value = re.sub(r"[^a-z0-9 ]", " ", (value or "").lower())
-    replacements = {"street": "st", "avenue": "ave", "road": "rd", "place": "pl"}
+    replacements = {"street": "st", "avenue": "ave",
+                    "road": "rd", "place": "pl"}
     words = [replacements.get(word, word) for word in value.split()]
     return " ".join(words)
 
@@ -132,7 +142,8 @@ def fetch_berdo_records() -> List[dict]:
         )
         response.raise_for_status()
         records = response.json()["result"]["records"]
-        _berdo_cache.update({"expires": time.time() + 3600, "records": records})
+        _berdo_cache.update(
+            {"expires": time.time() + 3600, "records": records})
         return records
     except (requests.RequestException, KeyError, ValueError) as err:
         print(f"Boston BERDO lookup failed: {err}")
@@ -156,19 +167,24 @@ def enrich_with_berdo(buildings: List[dict]) -> List[dict]:
         record = by_address.get(normalized_address)
         if not record:
             building_tokens = set(normalized_address.split())
-            house_numbers = [token for token in building_tokens if token.isdigit()]
-            street_tokens = {token for token in building_tokens if not token.isdigit()}
+            house_numbers = [
+                token for token in building_tokens if token.isdigit()]
+            street_tokens = {
+                token for token in building_tokens if not token.isdigit()}
             best_score = 0.0
             for number in house_numbers:
                 for candidate_address, candidate in by_number.get(number, []):
-                    candidate_street = {token for token in candidate_address.split() if not token.isdigit()}
-                    score = len(street_tokens & candidate_street) / max(1, len(street_tokens | candidate_street))
+                    candidate_street = {
+                        token for token in candidate_address.split() if not token.isdigit()}
+                    score = len(street_tokens & candidate_street) / \
+                        max(1, len(street_tokens | candidate_street))
                     if score > best_score:
                         best_score, record = score, candidate
             if best_score < 0.6:
                 record = None
         if not record:
             continue
+
         def numeric(field: str):
             try:
                 return float(record[field]) if record.get(field) not in (None, "") else None
@@ -196,8 +212,10 @@ def _modeled_buildings(lat: float, lon: float, count: int = 10) -> List[dict]:
         seed = f"{lat:.4f}:{lon:.4f}:{idx}"
         floors = _stable_number(seed + ":floors", 1, 8)
         roof_area = float(_stable_number(seed + ":roof", 6000, 30000))
-        lat_offset = ((_stable_number(seed + ":lat", 0, 1000) / 1000) - 0.5) * 0.018
-        lon_offset = ((_stable_number(seed + ":lon", 0, 1000) / 1000) - 0.5) * 0.018
+        lat_offset = (
+            (_stable_number(seed + ":lat", 0, 1000) / 1000) - 0.5) * 0.018
+        lon_offset = (
+            (_stable_number(seed + ":lon", 0, 1000) / 1000) - 0.5) * 0.018
         buildings.append({
             "id": idx,
             "osm_id": -idx,
@@ -232,7 +250,8 @@ def _polygon_area_sqft(geometry: List[dict], latitude: float) -> float | None:
 
 def fetch_real_buildings(lat: float, lon: float, radius: int = 1500, limit: int = 500, focus_osm_type: str | None = None, focus_osm_id: int | None = None) -> List[dict]:
     """Queries public structural footprints through redundant OSM Overpass services."""
-    cache_key = (round(lat, 5), round(lon, 5), radius, limit, focus_osm_type, focus_osm_id)
+    cache_key = (round(lat, 5), round(lon, 5), radius,
+                 limit, focus_osm_type, focus_osm_id)
     cached = _building_cache.get(cache_key)
     if cached and cached["expires"] > time.time():
         return cached["buildings"]
@@ -262,7 +281,8 @@ def fetch_real_buildings(lat: float, lon: float, radius: int = 1500, limit: int 
                 if elements:
                     break
             else:
-                print(f"OSM endpoint {overpass_url} returned HTTP {res.status_code}: {res.text[:200]}")
+                print(
+                    f"OSM endpoint {overpass_url} returned HTTP {res.status_code}: {res.text[:200]}")
         except (requests.RequestException, ValueError) as err:
             print(f"OSM endpoint {overpass_url} failed: {err}")
 
@@ -275,7 +295,8 @@ def fetch_real_buildings(lat: float, lon: float, radius: int = 1500, limit: int 
                 continue
             name = tags.get("name") or tags.get("addr:housename")
             building_tag = tags.get("building", "yes")
-            b_type = "Building" if building_tag == "yes" else building_tag.replace("_", " ").title()
+            b_type = "Building" if building_tag == "yes" else building_tag.replace(
+                "_", " ").title()
 
             center = e.get("center", {})
             clat = center.get("lat", e.get("lat"))
@@ -297,7 +318,8 @@ def fetch_real_buildings(lat: float, lon: float, radius: int = 1500, limit: int 
             except (TypeError, ValueError):
                 roof_area = _polygon_area_sqft(geometry, clat)
             floor_area = roof_area * floors if roof_area and floors else None
-            address_parts = [tags.get("addr:housenumber"), tags.get("addr:street")]
+            address_parts = [
+                tags.get("addr:housenumber"), tags.get("addr:street")]
             address = " ".join(part for part in address_parts if part) or None
             source_id = f"osm:{e.get('type', 'way')}:{e['id']}"
 
@@ -324,12 +346,15 @@ def fetch_real_buildings(lat: float, lon: float, radius: int = 1500, limit: int 
             idx += 1
             if idx > limit:
                 break
-        buildings.sort(key=lambda b: (b["lat"] - lat) ** 2 + (b["lon"] - lon) ** 2)
+        buildings.sort(key=lambda b: (
+            b["lat"] - lat) ** 2 + (b["lon"] - lon) ** 2)
         for idx, building in enumerate(buildings, 1):
             building["id"] = idx
         if buildings:
-            _building_cache[cache_key] = {"expires": time.time() + 900, "buildings": buildings}
-            _building_cache[(round(lat, 5), round(lon, 5), radius, limit, None, None)] = {"expires": time.time() + 900, "buildings": buildings}
+            _building_cache[cache_key] = {
+                "expires": time.time() + 900, "buildings": buildings}
+            _building_cache[(round(lat, 5), round(lon, 5), radius, limit, None, None)] = {
+                "expires": time.time() + 900, "buildings": buildings}
         return buildings
     except Exception as err:
         print(f"OSM parsing failed: {err}")
@@ -364,8 +389,10 @@ def gather_multi_temporal_weather(lat: float, lon: float) -> dict:
             data = l_res.json()
             curr = data.get("current", {})
             daily = data.get("daily", {})
-            forecast_radiation = [value for value in daily.get("shortwave_radiation_sum", []) if value is not None]
-            forecast_temps = [value for value in daily.get("temperature_2m_max", []) if value is not None]
+            forecast_radiation = [value for value in daily.get(
+                "shortwave_radiation_sum", []) if value is not None]
+            forecast_temps = [value for value in daily.get(
+                "temperature_2m_max", []) if value is not None]
 
             return {
                 "annual_historical_ghi": round(historical_ghi_sum, 1) if historical_ghi_sum else None,
@@ -401,11 +428,14 @@ def process_live_analytics(buildings: List[dict], weather: dict) -> List[dict]:
     for b in buildings:
         floor_area = b.get("floor_area")
         roof_area = b.get("roof_area")
-        intensity = 20.0 if b["type"] in ["Office", "Hotel", "Retail"] else 11.0
+        intensity = 20.0 if b["type"] in [
+            "Office", "Hotel", "Retail"] else 11.0
         modeled_elec_kwh = int(floor_area * intensity) if floor_area else None
-        annual_elec_kwh = int(b["disclosed_electricity_kwh"]) if b.get("disclosed_electricity_kwh") else None
+        annual_elec_kwh = int(b["disclosed_electricity_kwh"]) if b.get(
+            "disclosed_electricity_kwh") else None
         forecast_max = weather.get("future_forecast_max_temp")
-        climate_growth = max(0.005, min(0.035, (forecast_max - 70) * 0.0015)) if forecast_max is not None else None
+        climate_growth = max(0.005, min(
+            0.035, (forecast_max - 70) * 0.0015)) if forecast_max is not None else None
         historical_usage = [
             {
                 "year": datetime.now().year - years_ago,
@@ -422,23 +452,35 @@ def process_live_analytics(buildings: List[dict], weather: dict) -> List[dict]:
         ] if annual_elec_kwh and climate_growth is not None else []
 
         usable_roof_sqm = roof_area * ROOF_USABLE_RATIO * 0.092903 if roof_area else 0
-        solar_capacity_kw = round(usable_roof_sqm * SOLAR_PANEL_EFFICIENCY, 2) if roof_area else None
+        solar_capacity_kw = round(
+            usable_roof_sqm * SOLAR_PANEL_EFFICIENCY, 2) if roof_area else None
 
-        annual_solar_generation_kwh = int(solar_capacity_kw * ghi * PERFORMANCE_RATIO) if solar_capacity_kw and ghi else None
+        annual_solar_generation_kwh = int(
+            solar_capacity_kw * ghi * PERFORMANCE_RATIO) if solar_capacity_kw and ghi else None
 
-        gross_cost = int(solar_capacity_kw * SOLAR_COST_PER_KW) if solar_capacity_kw else None
-        net_cost = int(gross_cost * (1.0 - ITC_TAX_CREDIT)) if gross_cost else None
-        annual_savings = int(annual_solar_generation_kwh * ELECTRICITY_RATE_KWH) if annual_solar_generation_kwh else None
+        gross_cost = int(solar_capacity_kw *
+                         SOLAR_COST_PER_KW) if solar_capacity_kw else None
+        net_cost = int(gross_cost * (1.0 - ITC_TAX_CREDIT)
+                       ) if gross_cost else None
+        annual_savings = int(annual_solar_generation_kwh *
+                             ELECTRICITY_RATE_KWH) if annual_solar_generation_kwh else None
 
-        payback_years = round(net_cost / annual_savings, 2) if net_cost and annual_savings else None
-        roi_pct = round((annual_savings / net_cost) * 100, 2) if net_cost and annual_savings else None
-        carbon_reduction_tons = round(annual_solar_generation_kwh * 0.00028, 2) if annual_solar_generation_kwh else None
+        payback_years = round(net_cost / annual_savings,
+                              2) if net_cost and annual_savings else None
+        roi_pct = round((annual_savings / net_cost) * 100,
+                        2) if net_cost and annual_savings else None
+        carbon_reduction_tons = round(
+            annual_solar_generation_kwh * 0.00028, 2) if annual_solar_generation_kwh else None
 
         if roi_pct and payback_years and solar_capacity_kw:
-            financial_score = (min(100, roi_pct * 5) + min(100, (10 / payback_years) * 50)) / 2
-            scale_score = min(100, math.log1p(solar_capacity_kw) / math.log1p(500) * 100)
-            source_completeness = sum(bool(b.get(field)) for field in ("address", "floors", "year_built", "roof_area")) / 4 * 100
-            investment_score = round(financial_score * 0.5 + scale_score * 0.3 + source_completeness * 0.2, 1)
+            financial_score = (min(100, roi_pct * 5) +
+                               min(100, (10 / payback_years) * 50)) / 2
+            scale_score = min(100, math.log1p(
+                solar_capacity_kw) / math.log1p(500) * 100)
+            source_completeness = sum(bool(b.get(field)) for field in (
+                "address", "floors", "year_built", "roof_area")) / 4 * 100
+            investment_score = round(
+                financial_score * 0.5 + scale_score * 0.3 + source_completeness * 0.2, 1)
         else:
             investment_score = 0
 
@@ -465,7 +507,8 @@ def process_live_analytics(buildings: List[dict], weather: dict) -> List[dict]:
             "methodology": f"Score weights modeled financial performance 50%, usable solar scale 30%, and public-source field completeness 20%. Solar production uses {weather.get('historical_years', 0)} years of observed Open-Meteo daily radiation and is not adjusted by one day's weather. Present conditions and the 16-day forecast are contextual. Cost, savings, and carbon remain planning estimates.",
             "data_sources": [
                 b["building_source"],
-                b.get("energy_source", "No public building-level electricity record available"),
+                b.get("energy_source",
+                      "No public building-level electricity record available"),
                 "Open-Meteo historical archive and forecast APIs",
                 "Public engineering assumptions; no private utility meter data"
             ],
@@ -497,7 +540,8 @@ def geocode_location(q: str = Query(..., min_length=2, max_length=200)):
                 "limit": 5,
                 "countrycodes": "us",
             },
-            headers={"User-Agent": "GridPulseAI/3.0 (Florida public building research)"},
+            headers={
+                "User-Agent": "GridPulseAI/3.0 (Florida public building research)"},
             timeout=15,
         )
         response.raise_for_status()
@@ -521,7 +565,8 @@ def geocode_location(q: str = Query(..., min_length=2, max_length=200)):
 
     if not results:
         try:
-            school_query = any(term in q.lower() for term in ("school", "academy", "prep", "college", "university", "high school"))
+            school_query = any(term in q.lower() for term in (
+                "school", "academy", "prep", "college", "university", "high school"))
             arcgis = requests.get(
                 "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
                 params={
@@ -531,7 +576,8 @@ def geocode_location(q: str = Query(..., min_length=2, max_length=200)):
                     "maxLocations": 5,
                     **({"category": "Education"} if school_query else {}),
                 },
-                headers={"User-Agent": "GridPulseAI/3.0 Florida public building research"},
+                headers={
+                    "User-Agent": "GridPulseAI/3.0 Florida public building research"},
                 timeout=15,
             )
             arcgis.raise_for_status()
@@ -559,8 +605,10 @@ def geocode_location(q: str = Query(..., min_length=2, max_length=200)):
         try:
             census = requests.get(
                 "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress",
-                params={"address": f"{q.strip()}, Florida", "benchmark": "Public_AR_Current", "format": "json"},
-                headers={"User-Agent": "GridPulseAI/3.0 Florida public building research"},
+                params={"address": f"{q.strip()}, Florida",
+                        "benchmark": "Public_AR_Current", "format": "json"},
+                headers={
+                    "User-Agent": "GridPulseAI/3.0 Florida public building research"},
                 timeout=15,
             )
             census.raise_for_status()
@@ -584,7 +632,8 @@ def geocode_location(q: str = Query(..., min_length=2, max_length=200)):
             provider_errors.append(f"Census: {err}")
 
     if not results and len(provider_errors) == 3:
-        raise HTTPException(status_code=503, detail=f"Geocoding services unavailable: {'; '.join(provider_errors)}")
+        raise HTTPException(
+            status_code=503, detail=f"Geocoding services unavailable: {'; '.join(provider_errors)}")
     payload = {"query": q, "results": results}
     _geocode_cache[cache_key] = payload
     return payload
@@ -599,7 +648,8 @@ def get_scanned_buildings(
     focus_osm_type: str | None = Query(None, pattern="^(node|way|relation)$"),
     focus_osm_id: int | None = Query(None, ge=1),
 ):
-    raw_buildings = fetch_real_buildings(lat, lon, radius, limit, focus_osm_type, focus_osm_id)
+    raw_buildings = fetch_real_buildings(
+        lat, lon, radius, limit, focus_osm_type, focus_osm_id)
     weather = gather_multi_temporal_weather(lat, lon)
     return process_live_analytics(raw_buildings, weather)
 
@@ -669,6 +719,8 @@ def get_ai_prediction_report(osm_id: int, lat: float, lon: float, radius: int = 
     Write a detailed evaluation under 200 words explaining how the historical records versus future forecasts validates or challenges this asset's deployment viability. Do not use generic formatting filler.
     """
     try:
+        if ai_client is None:
+            raise RuntimeError("Gemini not configured")
         response = ai_client.models.generate_content(
             model="gemini-2.5-flash", contents=prompt)
         report_sections["Executive summary"] = response.text
@@ -701,11 +753,14 @@ def natural_language_search(req: SearchRequest):
     portfolio = process_live_analytics(raw_buildings, weather)
     normalized_query = req.query.lower()
     if "score" in normalized_query and any(word in normalized_query for word in ("lowest", "highest", "best", "worst", "minimum", "maximum")):
-        ascending = any(word in normalized_query for word in ("lowest", "worst", "minimum"))
-        ordered = sorted(portfolio, key=lambda item: item["investment_score"], reverse=not ascending)
+        ascending = any(word in normalized_query for word in (
+            "lowest", "worst", "minimum"))
+        ordered = sorted(
+            portfolio, key=lambda item: item["investment_score"], reverse=not ascending)
         count_match = re.search(r"\b(\d+)\b", normalized_query)
         singular_request = "building" in normalized_query and "buildings" not in normalized_query
-        count = min(10, int(count_match.group(1))) if count_match else 1 if singular_request else 5
+        count = min(10, int(count_match.group(1))
+                    ) if count_match else 1 if singular_request else 5
         selected = ordered[:count]
         direction = "lowest" if ascending else "highest"
         return {
@@ -732,6 +787,8 @@ def natural_language_search(req: SearchRequest):
     }}
     """
     try:
+        if ai_client is None:
+            raise RuntimeError("Gemini not configured")
         response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -746,21 +803,27 @@ def natural_language_search(req: SearchRequest):
         print(f"Gemini search fallback used: {e}")
         query = req.query.lower()
         if "carbon" in query or "emission" in query:
-            ordered = sorted(portfolio, key=lambda item: item["carbon_reduction_tons"] or 0, reverse=True)
+            ordered = sorted(
+                portfolio, key=lambda item: item["carbon_reduction_tons"] or 0, reverse=True)
             criterion = "projected annual carbon reduction"
         elif "payback" in query or "fastest" in query or "shortest" in query:
-            ordered = sorted(portfolio, key=lambda item: item["payback_years"] or float("inf"))
+            ordered = sorted(
+                portfolio, key=lambda item: item["payback_years"] or float("inf"))
             criterion = "shortest modeled payback"
         elif "saving" in query:
-            ordered = sorted(portfolio, key=lambda item: item["annual_savings"] or 0, reverse=True)
+            ordered = sorted(
+                portfolio, key=lambda item: item["annual_savings"] or 0, reverse=True)
             criterion = "projected annual savings"
         else:
-            wants_lowest = any(word in query for word in ("lowest", "worst", "bottom", "minimum", "least"))
-            ordered = sorted(portfolio, key=lambda item: item["investment_score"], reverse=not wants_lowest)
+            wants_lowest = any(word in query for word in (
+                "lowest", "worst", "bottom", "minimum", "least"))
+            ordered = sorted(
+                portfolio, key=lambda item: item["investment_score"], reverse=not wants_lowest)
             criterion = "lowest investment score" if wants_lowest else "highest investment score"
         count_match = re.search(r"\b(\d+)\b", query)
         singular_request = "building" in query and "buildings" not in query
-        count = min(10, int(count_match.group(1))) if count_match else 1 if singular_request else 5
+        count = min(10, int(count_match.group(1))
+                    ) if count_match else 1 if singular_request else 5
         selected = ordered[:count]
         return {
             "answer": f"Selected {len(selected)} {'building' if len(selected) == 1 else 'buildings'} ranked by {criterion}. Gemini was unavailable, so deterministic portfolio analytics were used.",

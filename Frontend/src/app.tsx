@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+proimport { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Activity, Building2, CheckCircle2, DollarSign, Leaf, Loader2, MapPin, Moon, Search, Sparkles, Sun, Target, Zap } from "lucide-react";
 import MapComponent from "./components/MapComponent";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const DEFAULT_LOCATION = { lat: 25.7617, lon: -80.1918, displayName: "Miami, Florida" };
 const FLORIDA_CITY_SUGGESTIONS = ["Jacksonville, Florida", "Miami, Florida", "Tampa, Florida", "Orlando, Florida", "St. Petersburg, Florida", "Hialeah, Florida", "Tallahassee, Florida", "Fort Lauderdale, Florida", "Port St. Lucie, Florida", "Cape Coral, Florida", "Gainesville, Florida", "Sarasota, Florida", "Key West, Florida"];
 

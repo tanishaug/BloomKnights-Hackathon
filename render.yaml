@@ -22,4 +22,5 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
+        value: https://gridpulse-api.onrender.com
         sync: false
