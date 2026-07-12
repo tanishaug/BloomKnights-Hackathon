@@ -1,4 +1,4 @@
-proimport { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { Activity, Building2, CheckCircle2, DollarSign, Leaf, Loader2, MapPin, Moon, Search, Sparkles, Sun, Target, Zap } from "lucide-react";
 import MapComponent from "./components/MapComponent";
